@@ -1,0 +1,6 @@
+cssselect
+lxml
+PyYaml
+requests
+treq
+Twisted

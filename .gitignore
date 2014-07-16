@@ -52,3 +52,9 @@ coverage.xml
 # Sphinx documentation
 docs/_build/
 
+.directory
+twistd.log
+twistd.pid
+archive-*
+state
+config.yaml
