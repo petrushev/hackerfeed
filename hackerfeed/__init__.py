@@ -116,4 +116,4 @@ class HNService(Service):
         """Send system notification for a given url"""
         notify(self.notifyHandle,
                title="Hacker News:",
-               text="<b>%s</b><br/><br/><span>%s</span>" % (title, url))
+               text="<b>%s</b><br/><br/><span><a href=\"%s\" >%s</a></span>" % (title, url, url))
