@@ -29,6 +29,12 @@ def filterTitle(title, keywords):
             return True
     return False
 
+def filterUrl(url, domains):
+    for domain in domains:
+        if domain in url:
+            return True
+    return False
+
 def extractLinks(body):
     """Returns a dictionary with url->title mapping"""
     doc = fromstring(body.decode('utf-8'))
@@ -46,6 +52,8 @@ class HNService(Service):
         self.interval = config['interval']
         self.keywords = tuple(' ' + word.strip()
                               for word in config['keywords'].split(','))
+        self.domains = tuple(domain.strip()
+                             for domain in config['domains'].split(','))
 
     def startService(self):
         # load history from state
@@ -104,7 +112,7 @@ class HNService(Service):
         for url in new_:
             title = links[url]
             appendLog = appendLog + ('%s %s : %s\n' % (today.strftime('%Y-%m-%d'), title.encode('utf-8'), url))
-            if filterTitle(title, self.keywords):
+            if filterTitle(title, self.keywords) or filterUrl(url, self.domains):
                 self.notifySystem(title, url)
 
         # update archive
