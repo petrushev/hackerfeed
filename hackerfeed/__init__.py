@@ -67,9 +67,6 @@ class HNService(Service):
 
         self.history = history
 
-        bus = dbus.SessionBus()
-        notifyObj = bus.get_object(DBUS_ITEM, DBUS_PATH)
-        self.notifyHandle = dbus.Interface(notifyObj, DBUS_INTERFACE)
 
         log.msg('HNService started.')
 
@@ -106,14 +103,22 @@ class HNService(Service):
         new_ = set(links.keys()).difference(self.history)
         self.history.update(new_)
 
+        bus = dbus.SessionBus()
+        notifyObj = bus.get_object(DBUS_ITEM, DBUS_PATH)
+        notifyHandle = dbus.Interface(notifyObj, DBUS_INTERFACE)
+
         # send system notifications for new urls
+
         today = date.today()
         appendLog = ''
         for url in new_:
             title = links[url]
             appendLog = appendLog + ('%s %s : %s\n' % (today.strftime('%Y-%m-%d'), title.encode('utf-8'), url))
             if filterTitle(title, self.keywords) or filterUrl(url, self.domains):
-                self.notifySystem(title, url)
+
+                notify(notifyHandle,
+                       title="Hacker News:",
+                       text="<b>%s</b><br/><br/><span><a href=\"%s\" >%s</a></span>" % (title, url, url))
 
         # update archive
         archiveName = today.strftime('archive-%Y-%m.txt')
@@ -122,6 +127,3 @@ class HNService(Service):
 
     def notifySystem(self, title, url):
         """Send system notification for a given url"""
-        notify(self.notifyHandle,
-               title="Hacker News:",
-               text="<b>%s</b><br/><br/><span><a href=\"%s\" >%s</a></span>" % (title, url, url))
