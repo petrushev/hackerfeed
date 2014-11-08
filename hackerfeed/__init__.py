@@ -35,9 +35,10 @@ def filterUrl(url, domains):
             return True
     return False
 
-def extractLinks(body):
+def extractLinks(body, url):
     """Returns a dictionary with url->title mapping"""
     doc = fromstring(body.decode('utf-8'))
+    doc.make_links_absolute(url)
     links = doc.cssselect("td.title a[href]")
     links.pop()
     links = dict((title_a.attrib['href'], title_a.text)
@@ -83,9 +84,10 @@ class HNService(Service):
             log.err('Error writing state: ' + str(exc))
 
     def fetch(self):
-        treq.get('http://news.ycombinator.com/newest')\
+        url = 'http://news.ycombinator.com/newest'
+        treq.get(url)\
             .addCallback(treq.content)\
-            .addCallback(self.onResponse)\
+            .addCallback(self.onResponse, url)\
             .addErrback(self.onGetError)
 
     def onGetError(self, failure):
@@ -94,12 +96,12 @@ class HNService(Service):
         # try again in 30 seconds
         reactor.callLater(30, self.fetch)
 
-    def onResponse(self, responseContent):
+    def onResponse(self, responseContent, url):
         """Called when new content arrives"""
         # schedule next crawl
         reactor.callLater(self.interval, self.fetch)
 
-        links = extractLinks(responseContent)
+        links = extractLinks(responseContent, url)
         new_ = set(links.keys()).difference(self.history)
         self.history.update(new_)
 
