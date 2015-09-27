@@ -1,7 +1,6 @@
 from string import punctuation
 from datetime import date
 import json
-import dbus
 
 from lxml.html import fromstring
 
@@ -10,14 +9,22 @@ from twisted.internet import reactor
 from twisted.python import log
 
 import treq
+from txdbus.client import connect as dbusConnect
 
 DBUS_ITEM = "org.freedesktop.Notifications"
 DBUS_PATH = "/org/freedesktop/Notifications"
-DBUS_INTERFACE = "org.freedesktop.Notifications"
+NOTIFY_CMD = 'Notify'
 
-def notify(notifyHandle, title, text):
+MESSAGE_TPL = """<b>{0}</b><br/><br/><span><a href="{1}" >{1}</a></span>"""
+
+
+def notify(notifier, title, text):
     """Partial for sending dbus notifications"""
-    return notifyHandle.Notify('Hacker News feed', 0, '', title, text, '', '', 3000)
+    d = notifier.callRemote(NOTIFY_CMD, 'Hacker News feed', 0, '',
+                            title, text,
+                            [], {}, 3000)
+    return d
+
 
 def filterTitle(title, keywords):
     """True if at least one keyword is in title"""
@@ -39,11 +46,12 @@ def extractLinks(body, url):
     """Returns a dictionary with url->title mapping"""
     doc = fromstring(body.decode('utf-8'))
     doc.make_links_absolute(url)
-    links = doc.cssselect("td.title a[href]")
+    links = doc.cssselect("td.title > a[href]")
     links.pop()
-    links = dict((title_a.attrib['href'], title_a.text)
+    links = dict((title_a.attrib['href'], title_a.text_content())
                  for title_a in links)
     return links
+
 
 class HNService(Service):
     """Main service"""
@@ -68,20 +76,36 @@ class HNService(Service):
 
         self.history = history
 
+        # connect to dbus
+        dbusConnect(reactor, 'session')\
+            .addCallback(self.onDbusConnect)
 
-        log.msg('HNService started.')
+    def onDbusConnect(self, connection):
+        self.dbusConnection = connection
 
+        # get notifier
+        connection.getRemoteObject(DBUS_ITEM, DBUS_PATH)\
+                  .addCallback(self.onNotifierReady)
+
+    def onNotifierReady(self, notifier):
+        self.notifier = notifier
+
+        # start first fetch
         self.fetch()
 
     def stopService(self):
-        # save history to state
         log.msg('HNService stoping...')
+
+        # save history to state
         try:
             state = json.dumps({'history': tuple(self.history)})
             with open('state', 'w') as f:
                 f.write(state)
         except Exception, exc:
             log.err('Error writing state: ' + str(exc))
+
+        # close dbus connection
+        self.dbusConnection.disconnect()
 
     def fetch(self):
         url = 'http://news.ycombinator.com/newest'
@@ -91,7 +115,7 @@ class HNService(Service):
             .addErrback(self.onGetError)
 
     def onGetError(self, failure):
-        log.err(failure.getErrorMessage())
+        log.err('Fetch error: ' + failure.getErrorMessage())
 
         # try again in 30 seconds
         reactor.callLater(30, self.fetch)
@@ -105,27 +129,21 @@ class HNService(Service):
         new_ = set(links.keys()).difference(self.history)
         self.history.update(new_)
 
-        bus = dbus.SessionBus()
-        notifyObj = bus.get_object(DBUS_ITEM, DBUS_PATH)
-        notifyHandle = dbus.Interface(notifyObj, DBUS_INTERFACE)
-
         # send system notifications for new urls
-
         today = date.today()
         appendLog = ''
+
         for url in new_:
             title = links[url]
-            appendLog = appendLog + ('%s %s : %s\n' % (today.strftime('%Y-%m-%d'), title.encode('utf-8'), url))
-            if filterTitle(title, self.keywords) or filterUrl(url, self.domains):
+            msg = '{0} {1} : {2}\n'.format(today.strftime('%Y-%m-%d'), title.encode('utf-8'), url)
+            appendLog = appendLog + msg
 
-                notify(notifyHandle,
+            if filterTitle(title, self.keywords) or filterUrl(url, self.domains):
+                notify(self.notifier,
                        title="Hacker News:",
-                       text="<b>%s</b><br/><br/><span><a href=\"%s\" >%s</a></span>" % (title, url, url))
+                       text= MESSAGE_TPL.format(title, url, url))
 
         # update archive
         archiveName = today.strftime('archive-%Y-%m.txt')
         with open(archiveName, 'a') as f:
             f.write(appendLog)
-
-    def notifySystem(self, title, url):
-        """Send system notification for a given url"""
