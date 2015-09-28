@@ -15,7 +15,7 @@ DBUS_ITEM = "org.freedesktop.Notifications"
 DBUS_PATH = "/org/freedesktop/Notifications"
 NOTIFY_CMD = 'Notify'
 
-MESSAGE_TPL = """<b>{0}</b><br/><br/><span><a href="{1}" >{1}</a></span>"""
+MESSAGE_TPL = u"""<b>{0}</b><br/><br/><span><a href="{1}" >{1}</a></span>"""
 
 
 def notify(notifier, title, text):
@@ -109,21 +109,24 @@ class HNService(Service):
 
     def fetch(self):
         url = 'http://news.ycombinator.com/newest'
-        treq.get(url)\
-            .addCallback(treq.content)\
-            .addCallback(self.onResponse, url)\
-            .addErrback(self.onGetError)
+        d = treq.get(url)\
+                .addCallback(treq.content)\
+                .addErrback(self.onGetError)
+        d = d.addCallback(self.onResponse, url)\
+             .addErrback(self.onParseError)
 
     def onGetError(self, failure):
         log.err('Fetch error: ' + failure.getErrorMessage())
+        # try again in 30 seconds
+        reactor.callLater(30, self.fetch)
 
+    def onParseError(self, failure):
+        log.err('Parse error: ' + failure.getErrorMessage())
         # try again in 30 seconds
         reactor.callLater(30, self.fetch)
 
     def onResponse(self, responseContent, url):
         """Called when new content arrives"""
-        # schedule next crawl
-        reactor.callLater(self.interval, self.fetch)
 
         links = extractLinks(responseContent, url)
         new_ = set(links.keys()).difference(self.history)
@@ -135,7 +138,8 @@ class HNService(Service):
 
         for url in new_:
             title = links[url]
-            msg = '{0} {1} : {2}\n'.format(today.strftime('%Y-%m-%d'), title.encode('utf-8'), url)
+            title_enc = title.encode('utf-8', 'replace')
+            msg = '{0} {1} : {2}\n'.format(today.strftime('%Y-%m-%d'), title_enc, url)
             appendLog = appendLog + msg
 
             if filterTitle(title, self.keywords) or filterUrl(url, self.domains):
@@ -147,3 +151,6 @@ class HNService(Service):
         archiveName = today.strftime('archive-%Y-%m.txt')
         with open(archiveName, 'a') as f:
             f.write(appendLog)
+
+        # schedule next crawl
+        reactor.callLater(self.interval, self.fetch)
