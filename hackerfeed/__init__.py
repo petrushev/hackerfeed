@@ -10,6 +10,8 @@ from twisted.python import log
 
 import treq
 from txdbus.client import connect as dbusConnect
+from twisted.web._newclient import ResponseNeverReceived
+from twisted.internet.error import ConnectingCancelledError
 
 DBUS_ITEM = "org.freedesktop.Notifications"
 DBUS_PATH = "/org/freedesktop/Notifications"
@@ -109,19 +111,19 @@ class HNService(Service):
 
     def fetch(self):
         url = 'http://news.ycombinator.com/newest'
-        d = treq.get(url)\
-                .addCallback(treq.content)\
-                .addErrback(self.onGetError)
-        d = d.addCallback(self.onResponse, url)\
-             .addErrback(self.onParseError)
+        treq.get(url, timeout=10)\
+            .addCallback(treq.content)\
+            .addCallback(self.onResponse, url)\
+            .addErrback(self.onResponseError)
 
-    def onGetError(self, failure):
-        log.err('Fetch error: ' + failure.getErrorMessage())
-        # try again in 30 seconds
-        reactor.callLater(30, self.fetch)
+    def onResponseError(self, failure):
+        msg = 'Fetch / parse error: '
+        if failure.type in (ConnectingCancelledError, ResponseNeverReceived):
+            msg = msg + 'connection timeout!'
+        else:
+            msg = msg + '{0}, {1}'.format(repr(failure.type),failure.getErrorMessage())
+        log.msg(msg)
 
-    def onParseError(self, failure):
-        log.err('Parse error: ' + failure.getErrorMessage())
         # try again in 30 seconds
         reactor.callLater(30, self.fetch)
 
