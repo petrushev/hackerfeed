@@ -12,6 +12,8 @@ import treq
 from txdbus.client import connect as dbusConnect
 from twisted.web._newclient import ResponseNeverReceived
 from twisted.internet.error import ConnectingCancelledError
+from twisted.internet.defer import gatherResults, Deferred
+from twisted.internet.task import deferLater
 
 DBUS_ITEM = "org.freedesktop.Notifications"
 DBUS_PATH = "/org/freedesktop/Notifications"
@@ -20,11 +22,36 @@ NOTIFY_CMD = 'Notify'
 MESSAGE_TPL = u"""<b>{0}</b><br/><br/><span><a href="{1}" >{1}</a></span>"""
 
 
-def notify(notifier, title, text):
-    """Partial for sending dbus notifications"""
-    d = notifier.callRemote(NOTIFY_CMD, 'Hacker News feed', 0, '',
-                            title, text,
-                            [], {}, 3000)
+def onNotifierReady(notifier, messages):
+    """Given notifier, dispatch all messages"""
+    deferreds = []
+    for text in messages:
+        single = notifier.callRemote(
+            NOTIFY_CMD, 'Hacker News feed', 0, '', "Hacker News:", text, [], {}, 6000)
+        deferreds.append(single)
+    del single
+
+    return gatherResults(deferreds, consumeErrors=True)
+
+def onDbusConnect(connection, messages):
+    d = Deferred()
+    internal = connection.getRemoteObject(DBUS_ITEM, DBUS_PATH)
+
+    internal.addCallback(onNotifierReady, messages)
+    internal.addErrback(d.errback)
+
+    def noficationDone(code):
+        connection.disconnect()
+        d.callback(code)
+
+    internal.addCallback(noficationDone)
+    internal.addErrback(d.errback)
+
+    return d
+
+def notify(messages):
+    d = dbusConnect(reactor, 'session')
+    d.addCallback(onDbusConnect, messages)
     return d
 
 
@@ -78,22 +105,7 @@ class HNService(Service):
 
         self.history = history
 
-        # connect to dbus
-        dbusConnect(reactor, 'session')\
-            .addCallback(self.onDbusConnect)
-
-    def onDbusConnect(self, connection):
-        self.dbusConnection = connection
-
-        # get notifier
-        connection.getRemoteObject(DBUS_ITEM, DBUS_PATH)\
-                  .addCallback(self.onNotifierReady)
-
-    def onNotifierReady(self, notifier):
-        self.notifier = notifier
-
-        # start first fetch
-        self.fetch()
+        reactor.callWhenRunning(self.fetch)
 
     def stopService(self):
         log.msg('HNService stoping...')
@@ -106,9 +118,6 @@ class HNService(Service):
         except Exception, exc:
             log.err('Error writing state: ' + str(exc))
 
-        # close dbus connection
-        self.dbusConnection.disconnect()
-
     def fetch(self):
         url = 'http://news.ycombinator.com/newest'
         treq.get(url, timeout=10)\
@@ -120,12 +129,14 @@ class HNService(Service):
         msg = 'Fetch / parse error: '
         if failure.type in (ConnectingCancelledError, ResponseNeverReceived):
             msg = msg + 'connection timeout!'
+        elif failure.type == UnicodeEncodeError:
+            msg = failure.getTraceback()
         else:
-            msg = msg + '{0}, {1}'.format(repr(failure.type),failure.getErrorMessage())
+            msg = msg + '{0}, {1}'.format(repr(failure.type), failure.getErrorMessage())
         log.msg(msg)
 
         # try again in 30 seconds
-        reactor.callLater(30, self.fetch)
+        deferLater(reactor, 30, self.fetch)
 
     def onResponse(self, responseContent, url):
         """Called when new content arrives"""
@@ -138,6 +149,8 @@ class HNService(Service):
         today = date.today()
         appendLog = ''
 
+        messages = []
+
         for url in new_:
             title = links[url]
             title_enc = title.encode('utf-8', 'replace')
@@ -145,9 +158,9 @@ class HNService(Service):
             appendLog = appendLog + msg
 
             if filterTitle(title, self.keywords) or filterUrl(url, self.domains):
-                notify(self.notifier,
-                       title="Hacker News:",
-                       text= MESSAGE_TPL.format(title, url, url))
+                messages.append(MESSAGE_TPL.format(title, url, url))
+
+        notify(messages)
 
         # update archive
         archiveName = today.strftime('archive-%Y-%m.txt')
@@ -155,4 +168,4 @@ class HNService(Service):
             f.write(appendLog)
 
         # schedule next crawl
-        reactor.callLater(self.interval, self.fetch)
+        deferLater(reactor, self.interval, self.fetch)
